@@ -1,4 +1,5 @@
-const state = { token: localStorage.getItem('clinicflow_token'), page: 1, authMode: 'login', doctors: [] };
+const storedUser = JSON.parse(localStorage.getItem('clinicflow_user') || 'null');
+const state = { token: localStorage.getItem('clinicflow_token'), user: storedUser, page: 1, authMode: 'login', doctors: [] };
 const $ = (selector) => document.querySelector(selector);
 
 function showToast(message) {
@@ -10,10 +11,31 @@ function showToast(message) {
 
 async function api(path, options = {}) {
   const headers = { ...(options.body ? {'Content-Type': 'application/json'} : {}), ...(state.token ? {Authorization: `Bearer ${state.token}`} : {}) };
-  const response = await fetch(path, {...options, headers});
+  let response;
+  try {
+    response = await fetch(path, {...options, headers});
+  } catch (error) {
+    throw new Error('Something went wrong. Please try again.');
+  }
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || 'Something went wrong');
+  if (!response.ok) {
+    if (response.status === 401 && state.token) {
+      clearSession();
+      openAuth();
+    }
+    throw new Error(data.error || 'Something went wrong. Please try again.');
+  }
   return data;
+}
+
+function clearSession() {
+  state.token = null;
+  state.user = null;
+  localStorage.removeItem('clinicflow_token');
+  localStorage.removeItem('clinicflow_user');
+  $('#workspace').hidden = true;
+  document.querySelector('main').hidden = false;
+  document.querySelector('.topbar').hidden = false;
 }
 
 function openAuth() { $('#auth-modal').hidden = false; }
@@ -37,12 +59,14 @@ async function submitAuth(event) {
   try {
     if (state.authMode === 'register') await api('/api/auth/register', {method: 'POST', body: JSON.stringify(payload)});
     const result = await api('/api/auth/login', {method: 'POST', body: JSON.stringify({email: payload.email, password: payload.password})});
-    state.token = result.token; localStorage.setItem('clinicflow_token', state.token); closeAuth(); showWorkspace(result.user); showToast('You are signed in.');
+    state.token = result.token; state.user = result.user; localStorage.setItem('clinicflow_token', state.token); localStorage.setItem('clinicflow_user', JSON.stringify(result.user)); closeAuth(); showWorkspace(result.user); showToast('You are signed in.');
   } catch (error) { message.textContent = error.message; }
 }
 
 function showWorkspace(user) {
   $('#welcome').textContent = `Good morning, ${user.name.split(' ')[0]}`;
+  $('#profile-name').textContent = user.name;
+  $('#profile-avatar').textContent = user.name.trim().charAt(0).toUpperCase();
   $('#workspace').hidden = false; document.querySelector('main').hidden = true; document.querySelector('.topbar').hidden = true;
   loadDoctors(); loadAppointments();
   $('#workspace').scrollIntoView({behavior: 'smooth'});
@@ -82,7 +106,7 @@ async function loadAppointments() {
     $('#page-label').textContent = `Page ${result.pagination.page} · ${result.pagination.total} total`;
     $('#previous-page').disabled = state.page <= 1; $('#next-page').disabled = state.page * result.pagination.per_page >= result.pagination.total;
     $('#appointments-list').innerHTML = result.items.length ? result.items.map((appointment) => `<article class="appointment-card ${appointment.status === 'cancelled' ? 'cancelled' : ''}"><div><strong>${appointment.patient.name}</strong><small>${new Date(appointment.start_time).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})} · ${appointment.doctor.name}</small></div>${appointment.status === 'scheduled' ? `<button class="cancel-button" data-cancel="${appointment.id}">Cancel</button>` : `<small>Cancelled · ₹${appointment.cancellation_fee}</small>`}</article>`).join('') : '<p class="form-message">No appointments match this view.</p>';
-  } catch (error) { showToast(error.message); }
+  } catch (error) { status.textContent = error.message; showToast(error.message); }
 }
 
 async function submitBooking(event) {
@@ -94,9 +118,9 @@ document.querySelectorAll('[data-open-auth]').forEach((button) => button.addEven
 document.querySelector('[data-close-auth]').addEventListener('click', closeAuth);
 document.querySelectorAll('[data-auth-tab]').forEach((tab) => tab.addEventListener('click', () => setAuthMode(tab.dataset.authTab)));
 $('#auth-form').addEventListener('submit', submitAuth); $('#booking-form').addEventListener('submit', submitBooking);
-$('#logout').addEventListener('click', () => { localStorage.removeItem('clinicflow_token'); location.reload(); });
+$('#logout').addEventListener('click', () => { clearSession(); closeAuth(); });
 $('#patient-search').addEventListener('input', () => { state.page = 1; loadAppointments(); }); $('#schedule-doctor-filter').addEventListener('change', () => { state.page = 1; loadAppointments(); }); $('#day-filter').addEventListener('change', () => { state.page = 1; loadAppointments(); }); $('#sort-filter').addEventListener('change', () => { state.page = 1; loadAppointments(); });
 $('#previous-page').addEventListener('click', () => { state.page -= 1; loadAppointments(); }); $('#next-page').addEventListener('click', () => { state.page += 1; loadAppointments(); });
 $('#appointments-list').addEventListener('click', async (event) => { const id = event.target.dataset.cancel; if (!id) return; try { const result = await api(`/api/appointments/${id}/cancel`, {method: 'POST'}); showToast(result.cancellation_fee ? `Cancelled. Fee: ₹${result.cancellation_fee}` : 'Cancelled for free.'); loadAppointments(); } catch (error) { showToast(error.message); } });
 
-if (state.token) { showWorkspace({name: 'there'}); }
+if (state.token) { showWorkspace(state.user || {name: 'ClinicFlow user'}); }

@@ -3,7 +3,7 @@ from threading import Lock
 
 from sqlalchemy import func, select
 
-from .models import Appointment, Doctor, User
+from .models import Appointment, Doctor, OutboxEvent, User
 
 
 appointment_creation_lock = Lock()
@@ -44,6 +44,97 @@ def create_appointment(session, patient_id, doctor_id, start_time, end_time):
         session.add(appointment)
         session.commit()
         return appointment
+
+
+def reschedule_appointment(session, appointment_id, patient_id, start_time, end_time):
+    with appointment_creation_lock:
+        appointment = session.get(Appointment, appointment_id)
+        if not appointment:
+            raise DomainError("Appointment was not found", 404)
+        if appointment.patient_id != patient_id:
+            raise DomainError("You can only reschedule your own appointments", 403)
+        if appointment.status != "scheduled":
+            raise DomainError("Only scheduled appointments can be rescheduled")
+        if datetime.utcnow() >= appointment.start_time:
+            raise DomainError("Appointments cannot be rescheduled after they have started")
+        if end_time <= start_time:
+            raise DomainError("Appointment end time must be after start time")
+
+        conflict = session.scalar(
+            select(Appointment.id).where(
+                Appointment.id != appointment_id,
+                Appointment.doctor_id == appointment.doctor_id,
+                Appointment.status == "scheduled",
+                Appointment.start_time < end_time,
+                Appointment.end_time > start_time,
+            ).limit(1)
+        )
+        if conflict:
+            raise DomainError("Doctor already has an overlapping appointment", 409)
+
+        appointment.start_time = start_time
+        appointment.end_time = end_time
+        session.commit()
+        return appointment
+
+
+def complete_appointment(session, appointment_id, patient_id):
+    with appointment_creation_lock:
+        appointment = session.get(Appointment, appointment_id)
+        if not appointment:
+            raise DomainError("Appointment was not found", 404)
+        if appointment.patient_id != patient_id:
+            raise DomainError("You can only complete your own appointments", 403)
+        if appointment.status != "scheduled":
+            raise DomainError("Only scheduled appointments can be completed")
+        appointment.status = "completed"
+        session.commit()
+        return appointment
+
+
+def run_clock_jobs(session, clock_time):
+    with appointment_creation_lock:
+        today_start = datetime.combine(clock_time.date(), datetime.min.time())
+        tomorrow_start = today_start + timedelta(days=1)
+        todays_appointments = session.scalars(
+            select(Appointment).where(
+                Appointment.start_time >= today_start,
+                Appointment.start_time < tomorrow_start,
+                Appointment.status == "scheduled",
+            ).order_by(Appointment.start_time.asc())
+        ).all()
+        scheduled_appointments = session.scalars(
+            select(Appointment).where(Appointment.status == "scheduled")
+        ).all()
+
+        notifications_created = 0
+        no_shows_marked = 0
+        for appointment in scheduled_appointments:
+            if clock_time >= appointment.start_time + timedelta(minutes=30):
+                appointment.status = "no_show"
+                no_shows_marked += 1
+
+        for appointment in todays_appointments:
+            if appointment.status != "scheduled":
+                continue
+            existing_event = session.scalar(
+                select(OutboxEvent.id).where(
+                    OutboxEvent.event_type == "appointment_reminder",
+                    OutboxEvent.appointment_id == appointment.id,
+                ).limit(1)
+            )
+            if existing_event:
+                continue
+            session.add(OutboxEvent(
+                event_type="appointment_reminder",
+                appointment_id=appointment.id,
+                patient_id=appointment.patient_id,
+                message=f"Reminder: appointment with {appointment.doctor.name} at {appointment.start_time.isoformat()}",
+            ))
+            notifications_created += 1
+
+        session.commit()
+        return notifications_created, no_shows_marked
 
 
 def cancel_appointment(session, appointment_id, patient_id):

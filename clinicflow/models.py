@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -42,3 +42,15 @@ class Appointment(Base):
 
     doctor: Mapped[Doctor] = relationship(back_populates="appointments")
     patient: Mapped[User] = relationship(back_populates="appointments")
+
+
+class OutboxEvent(Base):
+    __tablename__ = "outbox_events"
+    __table_args__ = (UniqueConstraint("event_type", "appointment_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    appointment_id: Mapped[int] = mapped_column(ForeignKey("appointments.id"), index=True)
+    patient_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    message: Mapped[str] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)

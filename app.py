@@ -4,15 +4,25 @@ from functools import wraps
 from pathlib import Path
 
 import jwt
+from dotenv import load_dotenv
 from flask import Flask, jsonify, request, g, send_from_directory
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from clinicflow.database import Base, create_database
-from clinicflow.models import Appointment, Doctor, User
-from clinicflow.services import DomainError, cancel_appointment, create_appointment, find_appointments
+from clinicflow.models import Appointment, Doctor, OutboxEvent, User
+from clinicflow.services import (
+    DomainError,
+    cancel_appointment,
+    complete_appointment,
+    create_appointment,
+    find_appointments,
+    reschedule_appointment,
+    run_clock_jobs,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 
 
 def create_app(test_config=None):
@@ -163,6 +173,36 @@ def create_app(test_config=None):
                 "pagination": {"page": page, "per_page": per_page, "total": total, "pages": pages},
             })
 
+    @app.patch("/api/appointments/<int:appointment_id>")
+    @require_auth
+    def reschedule(appointment_id):
+        payload = request.get_json(silent=True) or {}
+        try:
+            start_time = parse_datetime(payload.get("start_time"))
+            end_time = parse_datetime(payload.get("end_time"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "start_time and end_time are required"}), 400
+        with session_factory() as session:
+            try:
+                appointment = reschedule_appointment(session, appointment_id, g.user_id, start_time, end_time)
+                session.refresh(appointment)
+                return jsonify(appointment_json(appointment))
+            except DomainError as error:
+                session.rollback()
+                return jsonify({"error": str(error)}), error.status_code
+
+    @app.post("/api/appointments/<int:appointment_id>/complete")
+    @require_auth
+    def complete(appointment_id):
+        with session_factory() as session:
+            try:
+                appointment = complete_appointment(session, appointment_id, g.user_id)
+                session.refresh(appointment)
+                return jsonify(appointment_json(appointment))
+            except DomainError as error:
+                session.rollback()
+                return jsonify({"error": str(error)}), error.status_code
+
     @app.post("/api/appointments/<int:appointment_id>/cancel")
     @require_auth
     def cancel(appointment_id):
@@ -174,6 +214,34 @@ def create_app(test_config=None):
             except DomainError as error:
                 session.rollback()
                 return jsonify({"error": str(error)}), error.status_code
+
+    @app.post("/clock")
+    def clock():
+        payload = request.get_json(silent=True) or {}
+        try:
+            clock_time = parse_datetime(payload.get("now")) if payload.get("now") else datetime.utcnow()
+        except (TypeError, ValueError):
+            return jsonify({"error": "now must be a valid ISO-8601 datetime"}), 400
+        with session_factory() as session:
+            notifications_created, no_shows_marked = run_clock_jobs(session, clock_time)
+        return jsonify({
+            "clock": clock_time.isoformat(),
+            "notifications_created": notifications_created,
+            "no_shows_marked": no_shows_marked,
+        })
+
+    @app.get("/outbox")
+    def outbox():
+        with session_factory() as session:
+            events = session.query(OutboxEvent).order_by(OutboxEvent.created_at.asc(), OutboxEvent.id.asc()).all()
+            return jsonify([{
+                "id": event.id,
+                "event_type": event.event_type,
+                "appointment_id": event.appointment_id,
+                "patient_id": event.patient_id,
+                "message": event.message,
+                "created_at": event.created_at.isoformat(),
+            } for event in events])
 
     return app
 
