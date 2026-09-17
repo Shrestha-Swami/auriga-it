@@ -1,105 +1,83 @@
-# Auriga IT
+# ClinicFlow
 
-Auriga IT is a modern technology workspace focused on delivering practical, reliable, and scalable digital solutions. This repository provides a starting point for building and documenting software projects, internal tools, or client-facing applications.
+ClinicFlow is a small clinic front-desk scheduling system built for a timed full-stack coding assessment. It prevents doctor double-booking, applies cancellation fees consistently, and gives staff a practical day view with patient search.
 
-## Overview
+## Stack
 
-This project is designed to help teams:
+- Python 3.11+
+- Flask 3.1
+- SQLAlchemy 2.0 ORM
+- SQLite (persistent local database)
+- PyJWT for bearer authentication
+- HTML, CSS, and vanilla JavaScript served by Flask
 
-- organize application code and documentation clearly
-- establish a consistent development workflow
-- document setup, usage, and configuration steps
-- serve as a foundation for future product or service development
-
-## Project Goals
-
-- Build maintainable software systems
-- Improve collaboration across teams
-- Keep documentation clear and easy to follow
-- Support efficient onboarding for new contributors
-
-## Getting Started
-
-### Prerequisites
-
-Before starting, ensure you have the following installed:
-
-- Git
-- A code editor such as VS Code
-- A runtime or framework relevant to the project (for example Node.js, Python, Java, etc.)
-
-### Clone the Repository
+## Setup and Run
 
 ```bash
-git clone https://github.com/your-username/auriga-it.git
-cd auriga-it
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python app.py
 ```
 
-### Install Dependencies
+Open `http://127.0.0.1:5000`. The SQLite database is created at `instance/clinicflow.sqlite3`, and three sample doctors are added on first run.
 
-If the project uses package managers or environment setup, install dependencies with the appropriate commands for your stack.
-
-Example:
+For development with the Flask reloader:
 
 ```bash
-npm install
+flask --app app run --debug
 ```
 
-or
+## Debugging and Checks
 
 ```bash
-pip install -r requirements.txt
+python3 -m py_compile app.py clinicflow/*.py
+node --check static/app.js
+curl http://127.0.0.1:5000/api/health
 ```
 
-## Development Workflow
+The app factory accepts a `DATABASE_URL` override, which makes isolated in-memory checks straightforward:
 
-1. Create a feature branch.
-2. Make your changes in a focused, well-documented manner.
-3. Run tests or validation steps relevant to the project.
-4. Commit changes with clear messages.
-5. Open a pull request for review.
+```python
+from app import create_app
+client = create_app({"DATABASE_URL": "sqlite:///:memory:"}).test_client()
+```
+
+## API
+
+Protected endpoints use `Authorization: Bearer <token>` from the login response.
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| GET | `/` | Landing page and frontend workspace |
+| GET | `/api/health` | Service health check |
+| POST | `/api/auth/register` | Create an account; JSON: `name`, `email`, `password` (8+ chars) |
+| POST | `/api/auth/login` | Authenticate; JSON: `email`, `password`; returns JWT |
+| GET | `/api/doctors` | List doctors for the booking form |
+| POST | `/api/appointments` | Book an appointment; JSON: `doctor_id`, `start_time`, `end_time` ISO-8601 |
+| GET | `/api/appointments` | List appointments with filters and pagination |
+| POST | `/api/appointments/<id>/cancel` | Cancel the authenticated patient’s appointment |
+
+`GET /api/appointments` query parameters:
+
+- `patient_name`: case-insensitive partial patient-name search
+- `doctor_id`: filter by doctor
+- `day`: ISO date, such as `2026-09-17`
+- `page`: 1-based page number
+- `per_page`: 1-50, default 10
+- `sort`: `start_time` or `-start_time`
+
+Appointment responses include the doctor, patient, start/end time, status, and cancellation fee. Cancellation fees are `0` at least 24 hours before the appointment and `200` within 24 hours. Cancellation after the start time is rejected.
 
 ## Project Structure
 
 ```text
-auriga-it/
-├── README.md
-├── src/                # Application source code
-├── tests/              # Automated tests
-├── docs/               # Technical or product documentation
-├── config/             # Configuration files
-├── package.json        # Node.js project metadata (if used)
-└── requirements.txt    # Python dependencies (if used)
+app.py                    Flask app factory and REST routes
+clinicflow/database.py    SQLAlchemy engine and declarative base
+clinicflow/models.py      User, Doctor, and Appointment ORM models
+clinicflow/services.py    Scheduling and cancellation business rules
+static/index.html         Landing page and workspace markup
+static/styles.css         Responsive ClinicFlow visual design
+static/app.js             Auth, booking, filtering, and UI behavior
+REASONING.md              Design decisions, tests, bugs, and fixes
 ```
-
-## Usage
-
-Describe how to run the application, launch services, or execute key commands once the project is configured.
-
-Example:
-
-```bash
-npm run dev
-```
-
-## Contributing
-
-Contributions are welcome. Please follow these steps:
-
-1. Fork the repository.
-2. Create a feature branch.
-3. Implement your changes.
-4. Run appropriate checks and validations.
-5. Submit a pull request with a clear description.
-
-## License
-
-This project is currently unlicensed unless stated otherwise. If you plan to share or distribute it publicly, consider adding an appropriate open-source license.
-
-## Contact
-
-For questions, collaboration, or project updates, contact the repository maintainer or team.
-
----
-
-This README can be expanded as the project matures with architecture details, API documentation, deployment instructions, and technical standards.
