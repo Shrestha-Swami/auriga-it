@@ -96,6 +96,17 @@ async function loadDoctors() {
   }
 }
 
+function formatAppointmentSchedule(appointment) {
+  const start = new Date(appointment.start_time);
+  const end = new Date(appointment.end_time);
+  const date = start.toLocaleDateString([], {month: 'short', day: 'numeric'});
+  const timeOptions = {hour: 'numeric', minute: '2-digit'};
+  const startLabel = start.toLocaleTimeString([], timeOptions);
+  const endLabel = end.toLocaleTimeString([], timeOptions);
+  const duration = Math.round((end - start) / 60000);
+  return `${date} · ${startLabel} – ${endLabel} · ${duration} min`;
+}
+
 async function loadAppointments() {
   const params = new URLSearchParams({page: state.page, per_page: 8, sort: $('#sort-filter').value});
   if ($('#schedule-doctor-filter').value) params.set('doctor_id', $('#schedule-doctor-filter').value);
@@ -105,7 +116,7 @@ async function loadAppointments() {
     const result = await api(`/api/appointments?${params}`);
     $('#page-label').textContent = `Page ${result.pagination.page} · ${result.pagination.total} total`;
     $('#previous-page').disabled = state.page <= 1; $('#next-page').disabled = state.page * result.pagination.per_page >= result.pagination.total;
-    $('#appointments-list').innerHTML = result.items.length ? result.items.map((appointment) => `<article class="appointment-card ${appointment.status === 'cancelled' ? 'cancelled' : ''}"><div><strong>${appointment.patient.name}</strong><small>${new Date(appointment.start_time).toLocaleString([], {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'})} · ${appointment.doctor.name}</small></div>${appointment.status === 'scheduled' ? `<button class="cancel-button" data-cancel="${appointment.id}">Cancel</button>` : `<small>Cancelled · ₹${appointment.cancellation_fee}</small>`}</article>`).join('') : '<p class="form-message">No appointments match this view.</p>';
+    $('#appointments-list').innerHTML = result.items.length ? result.items.map((appointment) => `<article class="appointment-card ${appointment.status === 'cancelled' ? 'cancelled' : ''}"><div class="appointment-details"><strong>${appointment.patient.name}</strong><span>${formatAppointmentSchedule(appointment)}</span><small>${appointment.doctor.name}</small></div>${appointment.status === 'scheduled' ? `<button class="cancel-button" data-cancel="${appointment.id}">Cancel</button>` : `<small class="appointment-status">Cancelled · ₹${appointment.cancellation_fee}</small>`}</article>`).join('') : '<p class="form-message">No appointments match this view.</p>';
   } catch (error) { status.textContent = error.message; showToast(error.message); }
 }
 
